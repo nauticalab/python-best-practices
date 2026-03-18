@@ -1,0 +1,805 @@
+# Python Common Guidelines
+
+A practical reference for writing clean, idiomatic, and maintainable Python code.
+
+---
+
+## Table of Contents
+
+1. [Code Style & Formatting](#1-code-style--formatting)
+2. [Type Hints & Static Analysis](#2-type-hints--static-analysis)
+3. [Project Structure & Packaging](#3-project-structure--packaging)
+4. [Dependency Management](#4-dependency-management)
+5. [Testing](#5-testing)
+6. [Documentation](#6-documentation)
+7. [Error Handling & Logging](#7-error-handling--logging)
+8. [Performance](#8-performance)
+9. [Security](#9-security)
+10. [Common Anti-Patterns to Avoid](#10-common-anti-patterns-to-avoid)
+
+---
+
+## 1. Code Style & Formatting
+
+### Follow PEP 8
+[PEP 8](https://peps.python.org/pep-0008/) is the official Python style guide. Key rules:
+- 4 spaces per indentation level (no tabs)
+- Maximum line length of **88 characters** (Black default; PEP 8 allows 79)
+- Two blank lines between top-level definitions, one between methods
+- Imports grouped: stdlib → third-party → local, each group separated by a blank line
+
+### Use an Autoformatter
+Enforce consistent style automatically — don't leave it to human judgment.
+
+```bash
+# Recommended: Ruff (fast, replaces black + isort + flake8)
+uv add --dev ruff
+ruff format .      # format files
+ruff check .       # lint
+```
+
+Configure in `pyproject.toml`:
+
+```toml
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # pycodestyle, pyflakes, isort, pyupgrade, bugbear
+ignore = ["E501"]  # line-too-long handled by formatter
+
+[tool.black]
+line-length = 88
+```
+
+### Automate Formatting with pre-commit Hooks
+
+[**pre-commit**](https://pre-commit.com/) is a framework for managing Git hooks. Configure it once and it automatically runs formatters, linters, and (optionally) tests every time you `git commit` — catching issues before they ever reach the remote.
+
+```bash
+uv add --dev pre-commit
+pre-commit install          # installs the hook into .git/hooks/pre-commit
+pre-commit run --all-files  # run manually across the whole repo
+```
+
+Add a `.pre-commit-config.yaml` at the project root:
+
+```yaml
+repos:
+  # Ruff: lint + format (replaces black, isort, flake8)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff          # lint and auto-fix
+        args: [--fix]
+      - id: ruff-format   # format (black-compatible)
+
+  # Pyright: type checking
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  # Optional: run fast unit tests before every commit
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: pytest (fast subset)
+        entry: uv run pytest tests/ -x -q --timeout=10
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+```
+
+> **Tip:** Keep pre-commit hooks fast (< 10 s). Run full test suites in CI, not on every local commit. Use `stages: [pre-push]` if you want heavier checks only on push.
+
+Commit `.pre-commit-config.yaml` to version control so the whole team uses the same hooks.
+
+### Naming Conventions
+
+| Entity | Convention | Example |
+|--------|-----------|---------|
+| Variables & functions | `snake_case` | `user_count`, `get_user()` |
+| Classes | `PascalCase` | `UserProfile` |
+| Constants | `UPPER_SNAKE_CASE` | `MAX_RETRIES` |
+| Private members | `_leading_underscore` | `_internal_cache` |
+| Dunder/magic methods | `__double_underscore__` | `__init__`, `__repr__` |
+| Modules / packages | `short_lowercase` | `utils`, `db_client` |
+
+---
+
+## 2. Type Hints & Static Analysis
+
+### Always Annotate Public APIs
+Type hints improve IDE support, catch bugs early, and serve as documentation.
+
+```python
+# Good
+def fetch_user(user_id: int, *, active_only: bool = True) -> User | None:
+    ...
+
+# Avoid — no type information for callers
+def fetch_user(user_id, active_only=True):
+    ...
+```
+
+### Use Modern Type Syntax (Python 3.10+)
+
+```python
+# Prefer union syntax over Union/Optional from typing
+def process(value: int | str | None) -> list[str]:
+    ...
+
+# Use built-in generics (3.9+) instead of typing.List, typing.Dict
+def get_items() -> list[dict[str, int]]:
+    ...
+```
+
+### Use Pyright for Static Type Checking
+
+Prefer **[Pyright](https://github.com/microsoft/pyright)** (or its distribution **basedpyright**) over mypy. Pyright is faster, ships natively in VS Code via the Pylance extension, and has excellent support for modern Python type features. Most editors have a native Pyright integration — use it instead of running a separate type-checker CLI in most workflows.
+
+```bash
+# Install standalone (or use your editor's built-in Pylance/Pyright)
+uv add --dev pyright
+pyright src/
+```
+
+`pyproject.toml`:
+
+```toml
+[tool.pyright]
+include = ["src"]
+strict = ["src"]
+pythonVersion = "3.11"
+```
+
+> **Note:** If you need CI type checking, run `pyright` (or `basedpyright`) in your pipeline. Avoid adding mypy as a second type checker — pick one and be consistent.
+
+### Useful `typing` Constructs
+
+```python
+from typing import TypeVar, Protocol, TypeAlias
+
+# TypeAlias for complex types
+UserId: TypeAlias = int
+
+# Protocol for structural subtyping (duck typing with type safety)
+class Serializable(Protocol):
+    def to_dict(self) -> dict[str, object]: ...
+
+# TypeVar for generic functions
+T = TypeVar("T")
+
+def first(items: list[T]) -> T | None:
+    return items[0] if items else None
+```
+
+---
+
+## 3. Project Structure & Packaging
+
+### Prefer the `src/` Layout
+
+Using a `src/` layout prevents accidental imports of the uninstalled package during development.
+
+```
+my_project/
+├── src/
+│   └── my_package/
+│       ├── __init__.py
+│       ├── core.py
+│       └── utils.py
+├── tests/
+│   ├── __init__.py
+│   └── test_core.py
+├── pyproject.toml
+└── README.md
+```
+
+### Use `pyproject.toml` as the Single Source of Truth
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "my-package"
+version = "0.1.0"
+description = "Short description"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/my_package"]
+```
+
+### Keep `__init__.py` Minimal
+Expose only the public API; avoid heavy logic or side effects in `__init__.py`.
+
+---
+
+## 4. Dependency Management
+
+### Use `uv` — The Recommended Dependency Manager
+
+**[uv](https://github.com/astral-sh/uv)** is the strongly recommended tool for all Python dependency and environment management. It is a single, extremely fast binary (written in Rust) that replaces `pip`, `pip-tools`, `venv`, `virtualenv`, and more. Unless you have a strong reason to use something else, use `uv` for every project.
+
+```bash
+# Install uv (one-time, system-wide)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create a new project with uv
+uv init my-project
+cd my-project
+
+# Create and manage virtual environments
+uv venv                        # create .venv
+source .venv/bin/activate      # activate (Linux/macOS)
+
+# Add/remove dependencies (updates pyproject.toml automatically)
+uv add httpx pydantic
+uv add --dev pytest ruff pyright
+uv remove httpx
+
+# Install all dependencies from pyproject.toml
+uv sync                        # install exact locked versions
+uv sync --all-extras           # include optional dependency groups
+
+# Run tools without activating the venv
+uv run pytest tests/
+uv run ruff check .
+```
+
+`pyproject.toml` with uv:
+
+```toml
+[project]
+name = "my-package"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.4", "pyright>=1.1"]
+```
+
+`uv` also generates a `uv.lock` file — commit this to version control for reproducible installs across environments.
+
+> **Avoid:** For new projects, avoid using bare `pip` + `requirements.txt` workflows. They lack dependency locking and environment management that `uv` provides automatically.
+
+### Pin Dependencies in Applications, Range-Constrain in Libraries
+
+```toml
+# Application: pin to exact versions for reproducibility (uv.lock handles this)
+dependencies = ["django==5.0.4", "psycopg[binary]==3.1.19"]
+
+# Library: use ranges to avoid conflicts with dependents
+dependencies = ["httpx>=0.25,<1.0"]
+```
+
+### Use a `.gitignore` Appropriate for Python
+
+A good `.gitignore` prevents committing virtual environments, build artefacts, cache files, and editor metadata. **Always start from [GitHub's official Python `.gitignore` template](https://github.com/github/gitignore/blob/main/Python.gitignore)** — it covers the full spectrum of Python tooling noise.
+
+Key entries you must have:
+
+```gitignore
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Byte-compiled / optimisation cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+# uv
+uv.lock is committed to VCS; the following are NOT:
+.python-version      # if managed per-project
+
+# Type checker caches
+.mypy_cache/
+.pyright/
+
+# Ruff / linter caches
+.ruff_cache/
+
+# Test & coverage artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Environment variable files — NEVER commit secrets
+.env
+.env.*
+!.env.example      # it's fine to commit a documented example file
+
+# Editor / IDE files
+.idea/
+.vscode/
+*.swp
+```
+
+> **Tip:** When starting a new repo on GitHub, select the **Python** template from the `.gitignore` dropdown — this gives you the community-maintained list maintained by GitHub. Revisit and prune it as your toolchain evolves.
+
+---
+
+## 5. Testing
+
+### Use pytest
+
+```bash
+uv add --dev pytest pytest-cov
+uv run pytest tests/ -v --cov=src/my_package --cov-report=term-missing
+```
+
+### Structure Tests Clearly
+
+```python
+# tests/test_core.py
+import pytest
+from my_package.core import divide
+
+class TestDivide:
+    def test_positive_numbers(self):
+        assert divide(10, 2) == 5.0
+
+    def test_negative_divisor(self):
+        assert divide(-6, 3) == -2.0
+
+    def test_division_by_zero_raises(self):
+        with pytest.raises(ZeroDivisionError):
+            divide(1, 0)
+```
+
+### Use Fixtures for Shared Setup
+
+```python
+import pytest
+from my_package.db import Database
+
+@pytest.fixture
+def db():
+    database = Database(":memory:")
+    database.migrate()
+    yield database
+    database.close()
+
+def test_insert_user(db):
+    db.insert_user(name="Alice")
+    assert db.count_users() == 1
+```
+
+### Aim for High Coverage, Not 100%
+
+- Target **80–90%** code coverage as a practical goal
+- Prioritise testing business logic and edge cases over trivial getters/setters
+- Use `# pragma: no cover` sparingly for unreachable or platform-specific branches
+
+### Parametrize to Reduce Duplication
+
+```python
+@pytest.mark.parametrize("value,expected", [
+    (0, "zero"),
+    (1, "positive"),
+    (-1, "negative"),
+])
+def test_classify(value, expected):
+    assert classify(value) == expected
+```
+
+---
+
+## 6. Documentation
+
+### Write Docstrings for All Public Symbols
+
+Use **Google-style** docstrings (readable, well-supported by tooling):
+
+```python
+def retry(func, *, max_attempts: int = 3, delay: float = 1.0):
+    """Retry a callable on failure with exponential back-off.
+
+    Args:
+        func: The callable to retry.
+        max_attempts: Maximum number of attempts before raising.
+        delay: Initial delay in seconds between retries.
+
+    Returns:
+        The return value of ``func`` on success.
+
+    Raises:
+        Exception: Re-raises the last exception after exhausting retries.
+
+    Example:
+        >>> retry(lambda: requests.get("https://example.com"), max_attempts=5)
+    """
+```
+
+### Keep Docstrings and Code in Sync
+Outdated documentation is worse than no documentation. Update docstrings when you change behaviour.
+
+### Use `mkdocs` for Project Docs
+
+**[MkDocs](https://www.mkdocs.org/)** with the [Material theme](https://squidfunk.github.io/mkdocs-material/) is the recommended way to turn Markdown files into a polished documentation site. It's simple to configure, renders beautifully, and integrates with GitHub Pages for free hosting.
+
+```bash
+uv add --dev mkdocs mkdocs-material mkdocstrings[python]
+mkdocs new .       # scaffold mkdocs.yml and docs/index.md
+mkdocs serve       # live-reload dev server at http://127.0.0.1:8000
+mkdocs build       # build static site into site/
+mkdocs gh-deploy   # publish to GitHub Pages
+```
+
+Minimal `mkdocs.yml`:
+
+```yaml
+site_name: My Project
+theme:
+  name: material
+plugins:
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+nav:
+  - Home: index.md
+  - API Reference: api.md
+```
+
+---
+
+## 7. Error Handling & Logging
+
+### Be Specific with Exceptions
+
+```python
+# Good — specific, recoverable
+try:
+    result = json.loads(raw)
+except json.JSONDecodeError as exc:
+    logger.warning("Invalid JSON payload: %s", exc)
+    return None
+
+# Avoid — swallows everything including KeyboardInterrupt
+try:
+    result = json.loads(raw)
+except:
+    return None
+```
+
+### Define Custom Exception Hierarchies
+
+```python
+class AppError(Exception):
+    """Base class for all application errors."""
+
+class ConfigError(AppError):
+    """Raised when configuration is missing or invalid."""
+
+class NetworkError(AppError):
+    """Raised on network-related failures."""
+```
+
+### Use `logging`, Not `print`
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)   # per-module logger
+
+# In your app entry point, configure once:
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+# Usage
+logger.debug("Processing item %d", item_id)
+logger.info("Server started on port %d", port)
+logger.error("Failed to connect to DB: %s", exc, exc_info=True)
+```
+
+### Prefer Structured Logging in Production
+
+Use [`structlog`](https://www.structlog.org/) or [`python-json-logger`](https://github.com/madzak/python-json-logger) for machine-parseable logs:
+
+```python
+import structlog
+
+log = structlog.get_logger()
+log.info("user_created", user_id=42, email="alice@example.com")
+# {"event": "user_created", "user_id": 42, "email": "alice@example.com", ...}
+```
+
+---
+
+## 8. Performance
+
+### Profile Before Optimising
+
+```python
+import cProfile
+import pstats
+
+with cProfile.Profile() as pr:
+    my_function()
+
+stats = pstats.Stats(pr)
+stats.sort_stats("cumulative").print_stats(20)
+```
+
+Or use `py-spy` for low-overhead sampling on live processes:
+
+```bash
+uv tool install py-spy
+py-spy top --pid <PID>
+```
+
+### Prefer Comprehensions Over Loops for Simple Transforms
+
+```python
+# Good
+squares = [x * x for x in range(100)]
+even_map = {k: v for k, v in data.items() if v % 2 == 0}
+
+# Avoid for simple cases
+squares = []
+for x in range(100):
+    squares.append(x * x)
+```
+
+### Use Generators for Large Sequences
+
+```python
+# Memory-efficient: processes one item at a time
+def read_large_file(path: str):
+    with open(path) as f:
+        for line in f:
+            yield line.strip()
+
+# Avoid loading everything into memory
+lines = list(open("huge.log").readlines())
+```
+
+### Cache Expensive, Pure Computations
+
+```python
+from functools import lru_cache, cache
+
+@cache  # unbounded (Python 3.9+)
+def fibonacci(n: int) -> int:
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+@lru_cache(maxsize=128)  # bounded cache
+def fetch_config(env: str) -> dict:
+    ...
+```
+
+### Use `__slots__` for Data-Heavy Classes
+
+By default, every Python instance stores its attributes in a `__dict__` — a regular dictionary that's flexible but uses significant memory. **`__slots__`** replaces this per-instance dictionary with a fixed set of named slots, which are stored more compactly. For classes that are instantiated in large numbers (e.g. data records, nodes in a graph, geometric primitives), this can cut memory usage by 30–50 % and slightly improve attribute-access speed.
+
+```python
+# Without __slots__: each instance carries a full dict (~200 bytes overhead)
+class PointDict:
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+
+# With __slots__: only the two declared slots are allocated (~56 bytes overhead)
+class Point:
+    __slots__ = ("x", "y")
+
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+```
+
+Trade-offs to be aware of:
+- You **cannot add arbitrary attributes** to an instance at runtime (no dynamic `__dict__`).
+- **Multiple inheritance** with `__slots__` requires care — all base classes must also declare `__slots__` (or use `__dict__`) or the benefit is lost.
+- For most classes `__slots__` is unnecessary; use it only when profiling shows memory is a bottleneck.
+
+> **Modern alternative:** [`dataclasses`](https://docs.python.org/3/library/dataclasses.html) support `__slots__` via `@dataclass(slots=True)` (Python 3.10+), which is cleaner than declaring them manually.
+
+---
+
+## 9. Security
+
+### Never Hardcode Secrets
+
+```python
+# Bad
+API_KEY = "sk-live-abc123"
+
+# Good — read from environment
+import os
+API_KEY = os.environ["API_KEY"]
+
+# Better — use python-dotenv in development
+from dotenv import load_dotenv
+load_dotenv()
+API_KEY = os.environ["API_KEY"]
+```
+
+### Avoid `eval()` and `exec()` on Untrusted Input
+
+```python
+# Dangerous
+user_input = "__import__('os').system('rm -rf /')"
+eval(user_input)  # Never do this
+
+# Use ast.literal_eval for safe evaluation of literals
+import ast
+value = ast.literal_eval("[1, 2, 3]")
+```
+
+### Use Parameterised Queries for Databases
+
+```python
+# Vulnerable to SQL injection
+query = f"SELECT * FROM users WHERE name = '{name}'"
+
+# Safe — use parameterised queries
+cursor.execute("SELECT * FROM users WHERE name = %s", (name,))
+```
+
+### Validate and Sanitise Input with Pydantic
+
+```python
+from pydantic import BaseModel, EmailStr, field_validator
+
+class CreateUserRequest(BaseModel):
+    name: str
+    email: EmailStr
+    age: int
+
+    @field_validator("age")
+    @classmethod
+    def age_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Age must be positive")
+        return v
+```
+
+### Scan Dependencies for Vulnerabilities
+
+```bash
+uv tool install pip-audit
+pip-audit
+```
+
+---
+
+## 10. Common Anti-Patterns to Avoid
+
+### Mutable Default Arguments
+
+```python
+# Bug: all callers share the same list object
+def append_item(item, lst=[]):
+    lst.append(item)
+    return lst
+
+# Fix: use None and create a new list inside
+def append_item(item, lst=None):
+    if lst is None:
+        lst = []
+    lst.append(item)
+    return lst
+```
+
+### Bare `except` Clauses
+
+```python
+# Swallows KeyboardInterrupt, SystemExit, MemoryError, etc.
+try:
+    risky()
+except:
+    pass
+
+# Be explicit
+try:
+    risky()
+except ValueError as exc:
+    logger.warning("Expected error: %s", exc)
+```
+
+### Comparing to `None` / `True` / `False` with `==`
+
+```python
+# Bad
+if result == None:
+    ...
+if flag == True:
+    ...
+
+# Good
+if result is None:
+    ...
+if flag:
+    ...
+```
+
+### Shadowing Built-ins
+
+```python
+# Avoid naming variables after built-ins
+list = [1, 2, 3]    # shadows built-in list()
+input = "hello"     # shadows built-in input()
+id = 42             # shadows built-in id()
+```
+
+### Overusing `*` Imports
+
+```python
+# Pollutes namespace, breaks static analysis
+from os.path import *
+
+# Be explicit
+from os.path import join, exists, dirname
+```
+
+### Not Using Context Managers for Resources
+
+```python
+# Risky: file not closed if exception occurs
+f = open("data.txt")
+data = f.read()
+f.close()
+
+# Correct: always use context managers
+with open("data.txt") as f:
+    data = f.read()
+```
+
+### String Concatenation in Loops
+
+```python
+# O(n²) due to string immutability — slow for large n
+result = ""
+for word in words:
+    result += word + " "
+
+# Correct: collect and join once
+result = " ".join(words)
+```
+
+---
+
+## Further Reading
+
+- [PEP 8 – Style Guide for Python Code](https://peps.python.org/pep-0008/)
+- [PEP 484 – Type Hints](https://peps.python.org/pep-0484/)
+- [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+- [Effective Python (3rd Edition) — Brett Slatkin](https://effectivepython.com/)
+- [Python Docs — Logging HOWTO](https://docs.python.org/3/howto/logging.html)
+- [Real Python — Python Best Practices](https://realpython.com/tutorials/best-practices/)
