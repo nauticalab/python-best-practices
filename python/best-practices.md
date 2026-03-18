@@ -33,14 +33,9 @@ Enforce consistent style automatically — don't leave it to human judgment.
 
 ```bash
 # Recommended: Ruff (fast, replaces black + isort + flake8)
-pip install ruff
+uv add --dev ruff
 ruff format .      # format files
 ruff check .       # lint
-
-# Alternative: Black + isort
-pip install black isort
-black .
-isort .
 ```
 
 Configure in `pyproject.toml`:
@@ -56,6 +51,53 @@ ignore = ["E501"]  # line-too-long handled by formatter
 [tool.black]
 line-length = 88
 ```
+
+### Automate Formatting with pre-commit Hooks
+
+[**pre-commit**](https://pre-commit.com/) is a framework for managing Git hooks. Configure it once and it automatically runs formatters, linters, and (optionally) tests every time you `git commit` — catching issues before they ever reach the remote.
+
+```bash
+uv add --dev pre-commit
+pre-commit install          # installs the hook into .git/hooks/pre-commit
+pre-commit run --all-files  # run manually across the whole repo
+```
+
+Add a `.pre-commit-config.yaml` at the project root:
+
+```yaml
+repos:
+  # Ruff: lint + format (replaces black, isort, flake8)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff          # lint and auto-fix
+        args: [--fix]
+      - id: ruff-format   # format (black-compatible)
+
+  # Pyright: type checking
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  # Optional: run fast unit tests before every commit
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: pytest (fast subset)
+        entry: uv run pytest tests/ -x -q --timeout=10
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+```
+
+> **Tip:** Keep pre-commit hooks fast (< 10 s). Run full test suites in CI, not on every local commit. Use `stages: [pre-push]` if you want heavier checks only on push.
+
+Commit `.pre-commit-config.yaml` to version control so the whole team uses the same hooks.
 
 ### Naming Conventions
 
@@ -97,20 +139,26 @@ def get_items() -> list[dict[str, int]]:
     ...
 ```
 
-### Run mypy in Strict Mode
+### Use Pyright for Static Type Checking
+
+Prefer **[Pyright](https://github.com/microsoft/pyright)** (or its distribution **basedpyright**) over mypy. Pyright is faster, ships natively in VS Code via the Pylance extension, and has excellent support for modern Python type features. Most editors have a native Pyright integration — use it instead of running a separate type-checker CLI in most workflows.
 
 ```bash
-pip install mypy
-mypy --strict src/
+# Install standalone (or use your editor's built-in Pylance/Pyright)
+uv add --dev pyright
+pyright src/
 ```
 
 `pyproject.toml`:
 
 ```toml
-[tool.mypy]
-strict = true
-ignore_missing_imports = true
+[tool.pyright]
+include = ["src"]
+strict = ["src"]
+pythonVersion = "3.11"
 ```
+
+> **Note:** If you need CI type checking, run `pyright` (or `basedpyright`) in your pipeline. Avoid adding mypy as a second type checker — pick one and be consistent.
 
 ### Useful `typing` Constructs
 
@@ -184,43 +232,120 @@ Expose only the public API; avoid heavy logic or side effects in `__init__.py`.
 
 ## 4. Dependency Management
 
-### Use a Modern Dependency Manager
+### Use `uv` — The Recommended Dependency Manager
 
-| Tool | Best For |
-|------|---------|
-| [uv](https://github.com/astral-sh/uv) | Speed-focused, drop-in pip/venv replacement |
-| [Poetry](https://python-poetry.org/) | Full dependency resolution + packaging |
-| [pip + venv](https://docs.python.org/3/library/venv.html) | Minimal, built-in, always available |
+**[uv](https://github.com/astral-sh/uv)** is the strongly recommended tool for all Python dependency and environment management. It is a single, extremely fast binary (written in Rust) that replaces `pip`, `pip-tools`, `venv`, `virtualenv`, and more. Unless you have a strong reason to use something else, use `uv` for every project.
+
+```bash
+# Install uv (one-time, system-wide)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create a new project with uv
+uv init my-project
+cd my-project
+
+# Create and manage virtual environments
+uv venv                        # create .venv
+source .venv/bin/activate      # activate (Linux/macOS)
+
+# Add/remove dependencies (updates pyproject.toml automatically)
+uv add httpx pydantic
+uv add --dev pytest ruff pyright
+uv remove httpx
+
+# Install all dependencies from pyproject.toml
+uv sync                        # install exact locked versions
+uv sync --all-extras           # include optional dependency groups
+
+# Run tools without activating the venv
+uv run pytest tests/
+uv run ruff check .
+```
+
+`pyproject.toml` with uv:
+
+```toml
+[project]
+name = "my-package"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.4", "pyright>=1.1"]
+```
+
+`uv` also generates a `uv.lock` file — commit this to version control for reproducible installs across environments.
+
+> **Avoid:** For new projects, avoid using bare `pip` + `requirements.txt` workflows. They lack dependency locking and environment management that `uv` provides automatically.
 
 ### Pin Dependencies in Applications, Range-Constrain in Libraries
 
 ```toml
-# Application: pin to exact versions for reproducibility
+# Application: pin to exact versions for reproducibility (uv.lock handles this)
 dependencies = ["django==5.0.4", "psycopg[binary]==3.1.19"]
 
 # Library: use ranges to avoid conflicts with dependents
 dependencies = ["httpx>=0.25,<1.0"]
 ```
 
-### Never Commit Virtual Environments
-Add to `.gitignore`:
-```
+### Use a `.gitignore` Appropriate for Python
+
+A good `.gitignore` prevents committing virtual environments, build artefacts, cache files, and editor metadata. **Always start from [GitHub's official Python `.gitignore` template](https://github.com/github/gitignore/blob/main/Python.gitignore)** — it covers the full spectrum of Python tooling noise.
+
+Key entries you must have:
+
+```gitignore
+# Virtual environments
 .venv/
 venv/
+env/
+ENV/
+
+# Byte-compiled / optimisation cache
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+# uv
+uv.lock is committed to VCS; the following are NOT:
+.python-version      # if managed per-project
+
+# Type checker caches
 .mypy_cache/
+.pyright/
+
+# Ruff / linter caches
 .ruff_cache/
+
+# Test & coverage artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Environment variable files — NEVER commit secrets
+.env
+.env.*
+!.env.example      # it's fine to commit a documented example file
+
+# Editor / IDE files
+.idea/
+.vscode/
+*.swp
 ```
 
-### Use `uv` for Fast Workflows
-
-```bash
-uv venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
-uv pip sync requirements.txt   # fast reproducible installs
-```
+> **Tip:** When starting a new repo on GitHub, select the **Python** template from the `.gitignore` dropdown — this gives you the community-maintained list maintained by GitHub. Revisit and prune it as your toolchain evolves.
 
 ---
 
@@ -229,8 +354,8 @@ uv pip sync requirements.txt   # fast reproducible installs
 ### Use pytest
 
 ```bash
-pip install pytest pytest-cov
-pytest tests/ -v --cov=src/my_package --cov-report=term-missing
+uv add --dev pytest pytest-cov
+uv run pytest tests/ -v --cov=src/my_package --cov-report=term-missing
 ```
 
 ### Structure Tests Clearly
@@ -319,13 +444,32 @@ def retry(func, *, max_attempts: int = 3, delay: float = 1.0):
 ### Keep Docstrings and Code in Sync
 Outdated documentation is worse than no documentation. Update docstrings when you change behaviour.
 
-### Use `mkdocs` or `sphinx` for Project Docs
+### Use `mkdocs` for Project Docs
+
+**[MkDocs](https://www.mkdocs.org/)** with the [Material theme](https://squidfunk.github.io/mkdocs-material/) is the recommended way to turn Markdown files into a polished documentation site. It's simple to configure, renders beautifully, and integrates with GitHub Pages for free hosting.
 
 ```bash
-# MkDocs + Material theme (recommended for simplicity)
-pip install mkdocs mkdocs-material mkdocstrings[python]
-mkdocs new .
-mkdocs serve
+uv add --dev mkdocs mkdocs-material mkdocstrings[python]
+mkdocs new .       # scaffold mkdocs.yml and docs/index.md
+mkdocs serve       # live-reload dev server at http://127.0.0.1:8000
+mkdocs build       # build static site into site/
+mkdocs gh-deploy   # publish to GitHub Pages
+```
+
+Minimal `mkdocs.yml`:
+
+```yaml
+site_name: My Project
+theme:
+  name: material
+plugins:
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+nav:
+  - Home: index.md
+  - API Reference: api.md
 ```
 
 ---
@@ -413,7 +557,7 @@ stats.sort_stats("cumulative").print_stats(20)
 Or use `py-spy` for low-overhead sampling on live processes:
 
 ```bash
-pip install py-spy
+uv tool install py-spy
 py-spy top --pid <PID>
 ```
 
@@ -459,9 +603,18 @@ def fetch_config(env: str) -> dict:
     ...
 ```
 
-### Use `slots` for Data-Heavy Classes
+### Use `__slots__` for Data-Heavy Classes
+
+By default, every Python instance stores its attributes in a `__dict__` — a regular dictionary that's flexible but uses significant memory. **`__slots__`** replaces this per-instance dictionary with a fixed set of named slots, which are stored more compactly. For classes that are instantiated in large numbers (e.g. data records, nodes in a graph, geometric primitives), this can cut memory usage by 30–50 % and slightly improve attribute-access speed.
 
 ```python
+# Without __slots__: each instance carries a full dict (~200 bytes overhead)
+class PointDict:
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+
+# With __slots__: only the two declared slots are allocated (~56 bytes overhead)
 class Point:
     __slots__ = ("x", "y")
 
@@ -469,6 +622,13 @@ class Point:
         self.x = x
         self.y = y
 ```
+
+Trade-offs to be aware of:
+- You **cannot add arbitrary attributes** to an instance at runtime (no dynamic `__dict__`).
+- **Multiple inheritance** with `__slots__` requires care — all base classes must also declare `__slots__` (or use `__dict__`) or the benefit is lost.
+- For most classes `__slots__` is unnecessary; use it only when profiling shows memory is a bottleneck.
+
+> **Modern alternative:** [`dataclasses`](https://docs.python.org/3/library/dataclasses.html) support `__slots__` via `@dataclass(slots=True)` (Python 3.10+), which is cleaner than declaring them manually.
 
 ---
 
@@ -533,7 +693,7 @@ class CreateUserRequest(BaseModel):
 ### Scan Dependencies for Vulnerabilities
 
 ```bash
-pip install pip-audit
+uv tool install pip-audit
 pip-audit
 ```
 
