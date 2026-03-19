@@ -508,34 +508,7 @@ class NetworkError(AppError):
 
 ### Use `logging`, Not `print`
 
-```python
-import logging
-
-logger = logging.getLogger(__name__)   # per-module logger
-
-# In your app entry point, configure once:
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-
-# Usage
-logger.debug("Processing item %d", item_id)
-logger.info("Server started on port %d", port)
-logger.error("Failed to connect to DB: %s", exc, exc_info=True)
-```
-
-### Prefer Structured Logging in Production
-
-Use [`structlog`](https://www.structlog.org/) or [`python-json-logger`](https://github.com/madzak/python-json-logger) for machine-parseable logs:
-
-```python
-import structlog
-
-log = structlog.get_logger()
-log.info("user_created", user_id=42, email="alice@example.com")
-# {"event": "user_created", "user_id": 42, "email": "alice@example.com", ...}
-```
+Replace `print()` calls with the `logging` module for production code — it adds severity levels, filtering, and structured output. See the dedicated **[Logging Guide](../docs/logging.md)** for logger naming, configuration patterns, structured logging with `structlog` / `python-json-logger`, and a full worked example.
 
 ---
 

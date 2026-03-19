@@ -7,6 +7,7 @@ A collection of best-practice guides for coding in Python and Rust, maintained b
 | Guide | Description |
 |-------|-------------|
 | [Python Guidelines](python/best-practices.md) | Common guidelines for writing clean, idiomatic Python |
+| [Python Logging](docs/logging.md) | Logging configuration, log levels, and structured logging |
 | Rust Guidelines *(coming soon)* | Best practices for safe, performant Rust code |
 
 ## Contributing
