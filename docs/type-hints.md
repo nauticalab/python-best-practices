@@ -9,7 +9,7 @@ A comprehensive guide to writing expressive, correct, and maintainable type anno
 1. [Why Type Hints Matter](#1-why-type-hints-matter)
 2. [Basic Annotation Syntax](#2-basic-annotation-syntax)
 3. [Modern Type Syntax (Python 3.9 / 3.10+)](#3-modern-type-syntax-python-39--310)
-4. [`typing` Module Essentials](#4-typing-module-essentials)
+4. [`typing` Module Essentials](#4-typing-module-essentials) — `TypeAlias`, `NewType`, `Callable`, `ClassVar`, `Final`, `Literal`, `TypedDict`, `overload`, `TypeGuard`, `assert_never`, `Annotated`
 5. [Protocols & Structural Subtyping](#5-protocols--structural-subtyping)
 6. [Generics and TypeVar](#6-generics-and-typevar)
 7. [Runtime vs. Static Typing](#7-runtime-vs-static-typing)
@@ -142,6 +142,8 @@ def process(value: Union[int, str]) -> str: ...    # 3.7–3.9 safe
 
 > **Caveat:** Deferred evaluation breaks code that inspects `__annotations__` at runtime (e.g., Pydantic v1, some dataclass utilities). On Python 3.10+ you rarely need this import — the native syntax already handles forward references via lazy evaluation.
 
+> **See also:** `TYPE_CHECKING` in [Section 7](#type_checking--avoid-circular-imports) shows how to pair this import with conditional imports to prevent circular dependency errors.
+
 ---
 
 ## 4. `typing` Module Essentials
@@ -160,6 +162,28 @@ Matrix: TypeAlias = list[list[float]]
 
 def send_request(url: str, headers: Headers) -> None: ...
 ```
+
+### `NewType` — semantic type distinctions at zero runtime cost
+
+`NewType` creates a named subtype of an existing type that is **distinct to the type checker but erased at runtime**. Use it to prevent accidentally mixing values that are the same primitive type but mean different things.
+
+```python
+from typing import NewType
+
+UserId = NewType("UserId", int)
+OrderId = NewType("OrderId", int)
+
+def get_user(user_id: UserId) -> None: ...
+
+uid = UserId(42)
+oid = OrderId(42)
+
+get_user(uid)   # OK
+get_user(oid)   # Error: Argument of type "OrderId" cannot be assigned to "UserId"
+get_user(42)    # Error: Argument of type "int" cannot be assigned to "UserId"
+```
+
+> **Runtime behaviour:** `UserId(42)` is just `42` — no wrapper object is created. The check is purely static.
 
 ### `Callable` — annotate functions as values
 
@@ -247,6 +271,71 @@ def parse(value: str | bytes) -> int | str:
         return int(value)
     return value.decode()
 ```
+
+### `TypeGuard` — custom type narrowing predicates
+
+`TypeGuard[T]` lets you tell the type checker that a function returning `True` guarantees the argument is of type `T` in the `if` branch.
+
+```python
+from typing import TypeGuard
+
+def is_str_list(val: list[object]) -> TypeGuard[list[str]]:
+    return all(isinstance(x, str) for x in val)
+
+def process(items: list[object]) -> None:
+    if is_str_list(items):
+        # items is narrowed to list[str] here
+        print(", ".join(items))
+```
+
+### `assert_never` — exhaustive matching
+
+Use `assert_never` to make Pyright verify that a `match` statement or `if/elif` chain handles every possible variant of a `Literal` or `Union` type. If a new variant is added and the check is forgotten, Pyright reports an error at compile time rather than silently falling through at runtime.
+
+```python
+from typing import Literal, assert_never
+
+Status = Literal["pending", "active", "closed"]
+
+def handle(status: Status) -> str:
+    if status == "pending":
+        return "Waiting..."
+    elif status == "active":
+        return "Running"
+    elif status == "closed":
+        return "Done"
+    else:
+        assert_never(status)   # Pyright error if any variant is unhandled
+```
+
+### `Annotated` — attach metadata to types
+
+`Annotated[T, metadata]` lets you embed validation constraints, documentation, or framework-specific hints directly in the type, without changing runtime behaviour.
+
+```python
+from typing import Annotated
+from pydantic import Field, BaseModel
+
+# Pydantic v2 — constraints live in the type annotation
+class Product(BaseModel):
+    name: Annotated[str, Field(min_length=1, max_length=100)]
+    price: Annotated[float, Field(gt=0)]
+    tags: Annotated[list[str], Field(max_length=10)]
+
+# FastAPI — path/query parameter constraints
+from fastapi import FastAPI, Path, Query
+
+app = FastAPI()
+
+@app.get("/items/{item_id}")
+def read_item(
+    item_id: Annotated[int, Path(ge=1)],
+    q: Annotated[str | None, Query(max_length=50)] = None,
+) -> dict[str, object]:
+    return {"item_id": item_id, "q": q}
+```
+
+> **Key point:** Extra arguments inside `Annotated` (after the first) are invisible to the standard type checker — they are only consumed by libraries that explicitly look for them (e.g., Pydantic, FastAPI, `beartype`).
 
 ---
 
@@ -776,7 +865,11 @@ def cleanup(tmp_dir: str) -> None:
 - [PEP 526 – Variable Annotations](https://peps.python.org/pep-0526/)
 - [PEP 544 – Protocols](https://peps.python.org/pep-0544/)
 - [PEP 585 – Built-in Generic Types](https://peps.python.org/pep-0585/)
+- [PEP 593 – `Annotated`](https://peps.python.org/pep-0593/)
 - [PEP 604 – Union Syntax `X | Y`](https://peps.python.org/pep-0604/)
+- [PEP 612 – `ParamSpec`](https://peps.python.org/pep-0612/)
+- [PEP 646 – Variadic Generics (`TypeVarTuple`)](https://peps.python.org/pep-0646/)
+- [PEP 673 – `Self` Type](https://peps.python.org/pep-0673/)
 - [Pyright documentation](https://microsoft.github.io/pyright/)
 - [mypy documentation](https://mypy.readthedocs.io/)
 - [Python Docs — `typing` module](https://docs.python.org/3/library/typing.html)
