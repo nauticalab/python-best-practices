@@ -179,6 +179,8 @@ def first(items: list[T]) -> T | None:
     return items[0] if items else None
 ```
 
+For a deeper treatment of type hints — including Protocols, Generics, `TypedDict`, `Literal`, dataclass annotations, and common anti-patterns — see the dedicated **[Type Hints Guide](../docs/type-hints.md)**.
+
 ---
 
 ## 3. Project Structure & Packaging
