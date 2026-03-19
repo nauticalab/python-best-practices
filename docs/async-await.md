@@ -127,7 +127,7 @@ async def fetch_all(urls: list[str]) -> list[str]:
 | CPU-heavy computation (image processing, ML inference) | `concurrent.futures.ProcessPoolExecutor` / `multiprocessing` |
 | Parallelising a handful of blocking calls | `concurrent.futures.ThreadPoolExecutor` |
 
-Use `asyncio.to_thread` (Python 3.9+) or `loop.run_in_executor()` to run blocking or CPU-bound code from an async context without blocking the event loop.
+Use `asyncio.to_thread` (Python 3.9+) to run blocking I/O in a thread from an async context without blocking the event loop. For CPU-bound functions, use `loop.run_in_executor()` with a `ProcessPoolExecutor` so the work runs in a separate process and can bypass the GIL.
 
 ```python
 import asyncio
@@ -137,14 +137,19 @@ def cpu_heavy(n: int) -> int:
     return sum(i * i for i in range(n))
 
 async def main() -> None:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     with ProcessPoolExecutor() as pool:
         result = await loop.run_in_executor(pool, cpu_heavy, 10_000_000)
     print(result)
 
-# Simpler for blocking I/O in threads (Python 3.9+)
+# For blocking I/O in threads (Python 3.9+): wrap open+read so both
+# happen inside the worker thread and the file handle is properly closed.
+def _read_file(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
 async def read_file(path: str) -> str:
-    return await asyncio.to_thread(open(path).read)
+    return await asyncio.to_thread(_read_file, path)
 ```
 
 > **Rule of thumb:** If your code mostly waits on the network or a database, `asyncio` will help. If it mostly computes, reach for `multiprocessing` instead.
@@ -401,23 +406,24 @@ async def fetch_all(urls: list[str], concurrency: int = 20) -> list[str]:
 ```python
 import asyncio
 
-async def producer(queue: asyncio.Queue[str], items: list[str]) -> None:
+async def producer(queue: asyncio.Queue[str | None], items: list[str]) -> None:
     for item in items:
         await queue.put(item)
     await queue.put(None)   # sentinel to signal completion
 
-async def consumer(queue: asyncio.Queue[str]) -> list[str]:
+async def consumer(queue: asyncio.Queue[str | None]) -> list[str]:
     results = []
     while True:
         item = await queue.get()
         if item is None:
+            queue.task_done()   # account for the sentinel
             break
         results.append(await process(item))
         queue.task_done()
     return results
 
 async def pipeline(items: list[str]) -> list[str]:
-    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10)
+    queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=10)
     async with asyncio.TaskGroup() as tg:
         tg.create_task(producer(queue, items))
         consumer_task = tg.create_task(consumer(queue))
@@ -541,7 +547,14 @@ def handle_task_exception(loop: asyncio.AbstractEventLoop, context: dict) -> Non
     else:
         logger.critical("Unhandled asyncio error: %s", context["message"])
 
-asyncio.get_event_loop().set_exception_handler(handle_task_exception)
+async def main() -> None:
+    # Register on the running loop — avoids the legacy get_event_loop() pitfalls
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(handle_task_exception)
+    # ... application code ...
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ---
@@ -670,11 +683,10 @@ async def _fetch_one(
 ) -> ScrapeResult:
     async with sem:
         try:
-            async with asyncio.timeout(timeout):
-                response = await client.get(url)
-                response.raise_for_status()
-                return ScrapeResult(url=url, body=response.text)
-        except TimeoutError:
+            response = await asyncio.wait_for(client.get(url), timeout=timeout)
+            response.raise_for_status()
+            return ScrapeResult(url=url, body=response.text)
+        except asyncio.TimeoutError:
             logger.warning("Timeout fetching %s", url)
             return ScrapeResult(url=url, error="timeout")
         except httpx.HTTPStatusError as exc:
@@ -783,9 +795,14 @@ async def bad_delay() -> None:
 async def good_delay() -> None:
     await asyncio.sleep(5)
 
-# Good: run blocking code in a thread pool
+# Good: run blocking code in a thread pool — open+read both happen in the
+# worker thread so the event loop is never touched and the file is closed.
+def _read_file(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
 async def good_blocking_io(path: str) -> str:
-    return await asyncio.to_thread(open(path).read)
+    return await asyncio.to_thread(_read_file, path)
 ```
 
 ### Calling `asyncio.get_event_loop()` to run coroutines
