@@ -6,18 +6,89 @@ A practical guide to writing correct, efficient, and maintainable asynchronous P
 
 ## Table of Contents
 
-1. [When to Use async/await](#1-when-to-use-asyncawait)
-2. [asyncio Basics](#2-asyncio-basics)
-3. [Tasks and Concurrency](#3-tasks-and-concurrency)
-4. [Common Patterns](#4-common-patterns)
-5. [Error Handling](#5-error-handling)
-6. [Testing Async Code](#6-testing-async-code)
-7. [Worked Example](#7-worked-example)
-8. [Common Anti-Patterns](#8-common-anti-patterns)
+1. [Concurrency and Parallelism — The Big Picture](#1-concurrency-and-parallelism--the-big-picture)
+2. [When to Use async/await](#2-when-to-use-asyncawait)
+3. [asyncio Basics](#3-asyncio-basics)
+4. [Tasks and Concurrency](#4-tasks-and-concurrency)
+5. [Common Patterns](#5-common-patterns)
+6. [Error Handling](#6-error-handling)
+7. [Testing Async Code](#7-testing-async-code)
+8. [Worked Example](#8-worked-example)
+9. [Common Anti-Patterns](#9-common-anti-patterns)
 
 ---
 
-## 1. When to Use async/await
+## 1. Concurrency and Parallelism — The Big Picture
+
+Before writing a single line of `async` code, it helps to understand two terms that are often confused: **concurrency** and **parallelism**. They describe different ways of handling multiple tasks, and choosing the wrong tool often comes down to mixing them up.
+
+### Concurrency: juggling tasks by taking turns
+
+**Concurrency** means that multiple tasks are *in progress at the same time* — but not necessarily *running at the same time*. One task makes some progress, then pauses, while another task takes a turn. The switching happens so quickly that it feels simultaneous.
+
+A good real-life analogy is a **coffee shop barista**.
+
+> Imagine a single barista on a busy morning. She takes an order, starts the espresso machine (which takes 25 seconds), and *while the machine runs* she takes the next customer's order, heats milk for the previous order, and writes a name on a cup. She isn't making two coffees at exactly the same moment — she has only two hands — but she handles many customers *concurrently* by filling in the waiting time with other work.
+
+Compare this to a barista who takes one order, stares at the espresso machine until it finishes, hands over the cup, and only *then* turns to the next customer. That's **sequential** (blocking) execution — each customer must wait for the one before to be fully served.
+
+Async/await in Python works exactly like the first barista. When a coroutine is waiting on a slow operation (a network response, a database query), the event loop uses that idle time to make progress on other coroutines.
+
+```
+Sequential (blocking):
+  Order 1: ──[wait 25s]──► serve ──────────────────────────────
+  Order 2:                          ──[wait 25s]──► serve ──────
+  Total:   ≈ 50 s
+
+Concurrent (async):
+  Order 1: ──[start machine]──···wait···──► serve
+  Order 2:    ──[start machine]──···wait···──► serve
+  Total:   ≈ 25 s  (both machines run at the same time)
+```
+
+### Parallelism: doing tasks simultaneously
+
+**Parallelism** means that multiple tasks are *literally executing at the same instant* — on separate CPU cores or separate machines.
+
+A good real-life analogy is a **restaurant kitchen with multiple chefs**.
+
+> Every chef works independently on a different dish at the exact same moment. If you need 10 omelettes, 10 chefs can make them all in the time it takes one chef to make one. The work is physically split across workers.
+
+In Python, true parallelism requires multiple processes (or C extension threads that release the GIL). The standard library's `multiprocessing` module and `concurrent.futures.ProcessPoolExecutor` are the tools for this.
+
+### The key distinction
+
+| | Concurrency | Parallelism |
+|---|---|---|
+| Tasks run at the same instant? | No — they take turns | Yes — simultaneously |
+| Benefit | Hides latency (waiting time) | Speeds up computation |
+| Best for | I/O-bound work (network, disk) | CPU-bound work (number crunching, image processing) |
+| Python tools | `asyncio`, `threading` | `multiprocessing`, `ProcessPoolExecutor` |
+
+A useful one-liner: **concurrency is about dealing with lots of things at once; parallelism is about doing lots of things at once.**
+
+### Where async/await fits
+
+Python's `async/await` is a concurrency tool. It lets one thread manage thousands of in-progress I/O operations by pausing a coroutine the moment it would block (e.g., waiting for a server to reply) and resuming it when the result arrives. No extra threads or processes are needed — the single event loop thread keeps the CPU busy doing useful work instead of sitting idle.
+
+```
+Single-threaded event loop — concurrent but not parallel:
+
+  Event loop thread:
+  ┌────────────────────────────────────────────────────────────┐
+  │  Coroutine A: send HTTP request → [waiting] ·········► read response
+  │  Coroutine B:                  send DB query → [waiting] ·► read row
+  │  Coroutine C:                           write file ──────►
+  └────────────────────────────────────────────────────────────┘
+  While A and B are waiting on the network, the loop runs C.
+  No time is wasted sitting idle.
+```
+
+This model is extremely efficient for web servers, API clients, and data pipelines — anything that spends more time waiting than computing. For tasks that spend their time computing (not waiting), you need parallelism instead. The next section explains how to tell the difference.
+
+---
+
+## 2. When to Use async/await
 
 ### The right problem: I/O-bound concurrency
 
@@ -80,7 +151,7 @@ async def read_file(path: str) -> str:
 
 ---
 
-## 2. asyncio Basics
+## 3. asyncio Basics
 
 ### Coroutines, awaitables, and the event loop
 
@@ -140,7 +211,7 @@ async def stream_lines(reader: asyncio.StreamReader) -> None:
 
 ---
 
-## 3. Tasks and Concurrency
+## 4. Tasks and Concurrency
 
 Running coroutines sequentially with `await` is fine when they depend on each other. For independent operations, wrap them in **Tasks** so they run concurrently.
 
@@ -272,7 +343,7 @@ async def main() -> None:
 
 ---
 
-## 4. Common Patterns
+## 5. Common Patterns
 
 ### Timeouts
 
@@ -378,7 +449,7 @@ async def main() -> None:
 
 ---
 
-## 5. Error Handling
+## 6. Error Handling
 
 ### Exceptions propagate from `await`
 
@@ -475,7 +546,7 @@ asyncio.get_event_loop().set_exception_handler(handle_task_exception)
 
 ---
 
-## 6. Testing Async Code
+## 7. Testing Async Code
 
 ### Set up `pytest-asyncio`
 
@@ -559,7 +630,7 @@ async def test_calls_external_service():
 
 ---
 
-## 7. Worked Example
+## 8. Worked Example
 
 A small async HTTP scraper that demonstrates concurrency limiting, error handling, timeouts, and structured task management.
 
@@ -694,7 +765,7 @@ async def test_scrape_preserves_order():
 
 ---
 
-## 8. Common Anti-Patterns
+## 9. Common Anti-Patterns
 
 ### Blocking the event loop
 
@@ -756,7 +827,7 @@ PYTHONASYNCIODEBUG=1 python -m myapp
 
 ### Discarding tasks without a reference
 
-As noted in [Section 3](#3-tasks-and-concurrency), tasks not held by a variable can be garbage-collected mid-execution.
+As noted in [Section 4](#4-tasks-and-concurrency), tasks not held by a variable can be garbage-collected mid-execution.
 
 ```python
 # Bug: task may be collected before it completes
