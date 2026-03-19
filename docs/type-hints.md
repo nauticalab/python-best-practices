@@ -107,7 +107,7 @@ def get_scores() -> List[int]: ...
 def process(value: int | str | None) -> list[str]: ...
 
 # Avoid (legacy)
-from typing import Optional, Union
+from typing import List, Optional, Union
 def process(value: Union[int, str, None]) -> List[str]: ...
 
 # Optional[X] is just shorthand for X | None — avoid it in new code
@@ -116,16 +116,31 @@ def find(name: str) -> str | None: ...   # clear and explicit
 
 ### `from __future__ import annotations`
 
-For Python 3.7–3.9, add this import at the top of any module to enable the 3.10+ union syntax and forward references without quotes. It makes all annotations strings (lazy evaluation), so they don't affect runtime performance.
+Adding `from __future__ import annotations` at the top of a module **postpones the evaluation** of all annotations, turning them into strings at runtime rather than evaluating them eagerly. This has two practical uses:
+
+- **Forward references without quotes** — you can refer to a class before it is defined without wrapping the name in a string.
+- **Avoiding import-time costs** — annotations are only resolved when explicitly requested (e.g., via `typing.get_type_hints()`).
+
+> **Important:** This import does *not* unlock the `X | Y` union syntax on Python 3.7–3.9. The `|` operator for types requires the Python 3.10+ parser. On 3.7–3.9, use `typing.Union[X, Y]` and `typing.Optional[X]` for unions.
 
 ```python
 from __future__ import annotations
 
-def build(parts: list[str], separator: str | None = None) -> str:
-    return (separator or "").join(parts)
+
+# Forward reference: Node refers to itself before the class is fully defined
+class Node:
+    def __init__(self, next: Node | None = None) -> None:  # no quotes needed
+        self.next = next
+
+
+# On Python 3.7–3.9, union types still require typing.Union / typing.Optional:
+from typing import Optional, Union
+
+def find(name: str) -> Optional[str]: ...          # 3.7–3.9 safe
+def process(value: Union[int, str]) -> str: ...    # 3.7–3.9 safe
 ```
 
-> **Note:** `from __future__ import annotations` defers evaluation of all annotations, which breaks code that relies on `__annotations__` at runtime (e.g., some Pydantic v1 patterns). In Python 3.11+ you rarely need it — just use the native syntax.
+> **Caveat:** Deferred evaluation breaks code that inspects `__annotations__` at runtime (e.g., Pydantic v1, some dataclass utilities). On Python 3.10+ you rarely need this import — the native syntax already handles forward references via lazy evaluation.
 
 ---
 
@@ -136,7 +151,7 @@ While modern syntax has replaced many `typing` exports, several remain essential
 ### `TypeAlias` — name complex types
 
 ```python
-from typing import TypeAlias
+from typing import Callable, TypeAlias
 
 # Give a meaningful name to a complex type
 Headers: TypeAlias = dict[str, str]
@@ -149,7 +164,7 @@ def send_request(url: str, headers: Headers) -> None: ...
 ### `Callable` — annotate functions as values
 
 ```python
-from typing import Callable
+from typing import Callable, TypeAlias
 
 # Callable[[arg_types...], return_type]
 Handler: TypeAlias = Callable[[str, int], bool]
@@ -323,14 +338,23 @@ name: str | None = first(["a", "b"])    # T = str
 ### Bounded TypeVar — constrain the type
 
 ```python
-from typing import TypeVar
-from numbers import Number
+from typing import Any, Protocol, TypeVar
 
-Numeric = TypeVar("Numeric", int, float, complex)   # union constraint
-Comparable = TypeVar("Comparable", bound="SupportsLessThan")  # upper bound
 
-def maximum(a: Numeric, b: Numeric) -> Numeric:
-    return a if a > b else b
+# Define the structural bound as a Protocol
+class SupportsLessThan(Protocol):
+    def __lt__(self, other: Any) -> bool: ...
+
+
+# Union constraint: T must be exactly int or float (not a subtype of either)
+Numeric = TypeVar("Numeric", int, float)
+
+# Upper bound: T must be a subtype of SupportsLessThan (i.e. support <)
+Comparable = TypeVar("Comparable", bound=SupportsLessThan)
+
+
+def maximum(a: Comparable, b: Comparable) -> Comparable:
+    return b if a < b else a
 ```
 
 ### Generic classes (Python 3.12+ `type` syntax)
@@ -587,7 +611,7 @@ class Builder:
 ### `Unpack` and `TypeVarTuple` — variadic generics (3.11+)
 
 ```python
-from typing import TypeVarTuple, Unpack
+from typing import Callable, TypeVarTuple, Unpack
 
 Ts = TypeVarTuple("Ts")
 
@@ -639,6 +663,9 @@ async def fetch_pages(url: str) -> AsyncIterator[bytes]:
 `Any` disables type checking for a value — it is compatible with every type in both directions. This is sometimes unavoidable (e.g., interfacing with truly dynamic code), but overusing it defeats the purpose of type hints.
 
 ```python
+import json
+from typing import Any
+
 # Avoid — loses all type safety
 def process(data: Any) -> Any:
     return data["value"]
