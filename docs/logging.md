@@ -18,12 +18,18 @@ A concise guide to configuring and using Python's logging system effectively in 
 
 ## 1. Use `logging`, Not `print()`
 
-`print()` has no concept of severity, destination, or filtering — it just writes to stdout and disappears in production. The `logging` module gives you:
+`print()` feels natural — it's instant feedback, no setup required. For a quick script or a throwaway experiment, it's perfectly fine. But as soon as your code runs in production or gets used by others, `print()` starts to show its limits.
 
-- **Severity levels** — suppress noisy debug output without changing code
-- **Routing** — send logs to files, syslog, external services, or multiple handlers at once
-- **Structured context** — attach timestamps, module names, and custom fields
-- **Runtime control** — change verbosity without redeploying
+Here's why it falls short:
+
+- **No severity levels.** Every `print()` always fires. To suppress debug noise in production you have to delete, comment out, or gate every call behind an `if DEBUG:` check — and remember to undo that before the next release.
+- **No timestamps or context.** Plain `print()` output gives you the message and nothing else. When you're debugging an incident at 2 am, you really want to know *when* each line was logged and *which module* it came from.
+- **Stdout only.** `print()` goes to one place. If you need errors in stderr, a rotating file, *and* a cloud log service, you're refactoring. The `logging` module routes the same log call to as many destinations as you like.
+- **No runtime control.** Changing verbosity means editing code and redeploying. With `logging` you can flip the level via an environment variable or config file — no code change needed.
+- **Thread-safety surprises.** In multi-threaded applications, concurrent `print()` calls can interleave mid-line, producing garbled output. `logging` handlers use locks to keep messages coherent.
+- **Invisible to log aggregators.** Tools like Datadog, Loki, and Splunk are built around structured log records. Raw `print()` output is just an untagged string they can't easily parse or index.
+
+Switching is straightforward — the API is almost as simple as `print()`:
 
 ```python
 # Avoid in production code
