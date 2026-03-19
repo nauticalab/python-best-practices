@@ -6,18 +6,69 @@ A practical guide to writing reliable, maintainable tests in Python using pytest
 
 ## Table of Contents
 
-1. [Unit Tests](#1-unit-tests)
-2. [Integration Tests](#2-integration-tests)
-3. [End-to-End Tests](#3-end-to-end-tests)
-4. [Property-Based Testing](#4-property-based-testing)
-5. [Mocking & Patching](#5-mocking--patching)
-6. [Test Organisation](#6-test-organisation)
-7. [Coverage](#7-coverage)
-8. [Worked Example](#8-worked-example)
+1. [Where to Start](#1-where-to-start)
+2. [Unit Tests](#2-unit-tests)
+3. [Integration Tests](#3-integration-tests)
+4. [End-to-End Tests](#4-end-to-end-tests)
+5. [Property-Based Testing](#5-property-based-testing)
+6. [Mocking & Patching](#6-mocking--patching)
+7. [Test Organisation](#7-test-organisation)
+8. [Coverage](#8-coverage)
+9. [Worked Example](#9-worked-example)
 
 ---
 
-## 1. Unit Tests
+## 1. Where to Start
+
+If you are new to testing in Python, the full landscape — unit tests, integration tests, E2E tests, property-based tests — can feel daunting. You do not need all of it at once.
+
+**Start here, in this order:**
+
+### Step 1 — Install pytest and write your first test
+
+```bash
+uv add --dev pytest
+```
+
+Create a file called `tests/test_<your_module>.py` and write one test for the most important function in your code:
+
+```python
+from myapp.pricing import calculate_discount
+
+def test_gold_customer_gets_ten_percent():
+    assert calculate_discount(100.0, tier="gold") == 10.0
+```
+
+Run it:
+
+```bash
+uv run pytest tests/ -v
+```
+
+That is all you need to get started. One test is infinitely better than none.
+
+### Step 2 — Cover your core logic with unit tests
+
+Write unit tests (see [Section 2](#2-unit-tests)) for the functions and classes that contain your business logic. Aim for the scenarios that matter most: the happy path, the main error cases, and any edge cases you already know about. Don't aim for 100% coverage immediately — focus on the code that would be most painful to break.
+
+### Step 3 — Add a smoke integration test
+
+Once your unit tests are in good shape, add one or two integration tests (see [Section 3](#3-integration-tests)) that verify the most critical end-to-end flow against a real database or service. Even a single integration test that exercises the full stack gives you confidence that the pieces connect correctly.
+
+### Step 4 — Add the rest as you need it
+
+The remaining sections — E2E tests, property-based tests, mocking, coverage enforcement — are tools you reach for when a specific problem arises, not things to set up on day one. Return to them when:
+
+- You break a workflow you thought was working → add an **E2E test**
+- You discover an edge-case bug from unexpected input → add a **property-based test**
+- A test is slow or flaky because of an external service → use **mocking**
+- You want to prevent coverage from regressing in CI → set a **coverage threshold**
+
+> **Rule of thumb:** Unit tests first, integration tests second, everything else when you have a reason.
+
+---
+
+## 2. Unit Tests
 
 Unit tests verify a single function or class in isolation, with all external dependencies replaced by stubs or mocks.
 
@@ -107,7 +158,7 @@ def test_discount_table(amount, tier, expected):
 
 ---
 
-## 2. Integration Tests
+## 3. Integration Tests
 
 Integration tests verify that multiple components work correctly together — typically involving real databases, queues, file systems, or network calls.
 
@@ -165,7 +216,7 @@ uv run pytest tests/                         # everything
 
 ---
 
-## 3. End-to-End Tests
+## 4. End-to-End Tests
 
 End-to-end (E2E) tests exercise a complete workflow from the user's perspective — starting the application and interacting with it as a real user would.
 
@@ -224,7 +275,7 @@ def test_cli_version():
 
 ---
 
-## 4. Property-Based Testing
+## 5. Property-Based Testing
 
 Property-based tests generate hundreds of random inputs automatically and check that a *property* (an invariant) holds for all of them. They are excellent for finding edge cases you wouldn't think to write by hand.
 
@@ -276,7 +327,7 @@ def test_discount_never_exceeds_amount(amount, tier):
 
 ---
 
-## 5. Mocking & Patching
+## 6. Mocking & Patching
 
 Use mocks to replace real dependencies (HTTP clients, email services, third-party APIs) during unit tests, keeping tests fast and deterministic.
 
@@ -337,7 +388,7 @@ def test_get_exchange_rate_retries_on_failure(mocker):
 
 ---
 
-## 6. Test Organisation
+## 7. Test Organisation
 
 ### Directory layout
 
@@ -406,7 +457,7 @@ markers     = [
 
 ---
 
-## 7. Coverage
+## 8. Coverage
 
 Coverage measures which lines of source code are executed during your test run.
 
@@ -453,7 +504,7 @@ open htmlcov/index.html
 
 ---
 
-## 8. Worked Example
+## 9. Worked Example
 
 A complete, minimal project showing how the pieces fit together.
 
