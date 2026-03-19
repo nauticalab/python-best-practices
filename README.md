@@ -8,6 +8,7 @@ A collection of best-practice guides for coding in Python and Rust, maintained b
 |-------|-------------|
 | [Python Guidelines](python/best-practices.md) | Common guidelines for writing clean, idiomatic Python |
 | [Python Logging](docs/logging.md) | Logging configuration, log levels, and structured logging |
+| [Python and C FFI](docs/c-ffi.md) | ctypes and cffi basics, memory management, and tool selection |
 | Rust Guidelines *(coming soon)* | Best practices for safe, performant Rust code |
 
 ## Contributing
