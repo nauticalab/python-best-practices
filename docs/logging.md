@@ -66,7 +66,21 @@ logger = logging.getLogger(__name__)
 
 **Never** use a bare string like `logging.getLogger("my_logger")` — it creates a flat, global name with no hierarchy.
 
-**Never** call `logging.basicConfig()` inside a library — doing so configures the root logger and surprises consumers of your package. Leave configuration to the application entry point.
+**Never** call `logging.basicConfig()` inside a library. Here's why it's such a footgun: `basicConfig()` configures the *root* logger, which is shared across the entire Python process. Crucially, it's a **no-op if the root logger already has handlers** — meaning whichever code calls it first "wins", and every subsequent call is silently ignored. If your library calls it at import time, one of two bad things happens:
+
+- **Your config wins.** The application's own `basicConfig()` or `dictConfig()` call, which may be carefully tuned for production, has no effect because yours already ran. The developer stares at unexpected log output and wonders why their config is being ignored.
+- **The app's config wins.** Your call is silently swallowed, so it appears to do nothing — but you've introduced a hidden ordering dependency that will break the day someone imports your library slightly earlier in the call stack.
+
+The right pattern for libraries is to attach a `NullHandler` to your top-level logger and leave all configuration decisions to the application:
+
+```python
+# mypackage/__init__.py
+import logging
+
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+```
+
+This is a single-line declaration that says: "I produce logs, but I make no decisions about where they go." If the application hasn't configured logging, your messages are quietly discarded rather than spewing to stdout unexpectedly. If it has, they flow through normally. Leave configuration to the application entry point.
 
 ---
 
