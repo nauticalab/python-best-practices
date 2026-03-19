@@ -9,9 +9,10 @@ A concise guide to configuring and using Python's logging system effectively in 
 1. [Use `logging`, Not `print()`](#1-use-logging-not-print)
 2. [Name Loggers with `__name__`](#2-name-loggers-with-__name__)
 3. [Log Levels](#3-log-levels)
-4. [Configuration Patterns](#4-configuration-patterns)
-5. [Structured Logging](#5-structured-logging)
-6. [Worked Example](#6-worked-example)
+4. [Writing Effective Log Messages](#4-writing-effective-log-messages)
+5. [Configuration Patterns](#5-configuration-patterns)
+6. [Structured Logging](#6-structured-logging)
+7. [Worked Example](#7-worked-example)
 
 ---
 
@@ -87,7 +88,95 @@ logger.critical("Cannot connect to primary DB — shutting down")
 
 ---
 
-## 4. Configuration Patterns
+## 4. Writing Effective Log Messages
+
+A log message is only useful if someone — or a search query — can act on it. These guidelines help you write messages that are easy to find, understand, and triage.
+
+### Be specific and include context
+
+Tell the reader *what* happened and *which* entity was involved. Vague messages force engineers to cross-reference code during an incident.
+
+```python
+# Hard to act on — what failed? which user?
+logger.error("Request failed")
+logger.info("Done")
+
+# Actionable — includes the operation, identifier, and reason
+logger.error("Failed to charge customer %s: %s", customer_id, exc)
+logger.info("Order %s dispatched to warehouse %s", order_id, warehouse_id)
+```
+
+### Use consistent, grep-friendly verbs
+
+Pick a small vocabulary of action verbs and use them consistently across the codebase. This makes `grep`/log-query filtering reliable.
+
+```python
+# Inconsistent — hard to search across services
+logger.info("User login successful")
+logger.info("Authenticated user")
+logger.info("Login OK for %s", username)
+
+# Consistent — one canonical verb per lifecycle event
+logger.info("user.login succeeded user_id=%s", user_id)
+logger.info("user.logout user_id=%s reason=%s", user_id, reason)
+logger.info("user.created user_id=%s email=%s", user_id, email)
+```
+
+### State the outcome, not just the intent
+
+Log *after* an operation completes (or fails), not only before it starts. Paired entry/exit logs make it easy to spot operations that started but never finished.
+
+```python
+logger.debug("Fetching config from %s", config_url)          # before
+config = fetch_config(config_url)
+logger.debug("Config fetched: %d keys loaded", len(config))  # after (outcome)
+```
+
+### Always log exceptions with `exc_info=True`
+
+Pass `exc_info=True` (or use `logger.exception()`) so the full traceback is captured. A message alone rarely provides enough context to debug.
+
+```python
+try:
+    result = call_external_api(payload)
+except TimeoutError as exc:
+    # logger.exception is shorthand for logger.error(..., exc_info=True)
+    logger.exception("API call timed out after %ds payload_size=%d", timeout, len(payload))
+    raise
+```
+
+### Never log sensitive data
+
+Passwords, tokens, API keys, and PII must never appear in logs — even at DEBUG level. Redact or omit them entirely.
+
+```python
+# Never do this
+logger.debug("Authenticating with token=%s", api_token)
+logger.info("Processing card number %s", card_number)
+
+# Log the presence or shape, not the value
+logger.debug("Authenticating — token present: %s", bool(api_token))
+logger.info("Processing payment card ending in %s", card_number[-4:])
+```
+
+### Keep messages machine-friendly in structured contexts
+
+When emitting JSON logs, prefer `key=value` pairs as separate fields rather than interpolating everything into the message string. Log aggregators can then filter and aggregate on individual fields.
+
+```python
+# Less useful in structured logging — all context buried in the string
+logger.info("Order %s for customer %s totalling $%.2f shipped", order_id, customer_id, total)
+
+# Better — fields are individually indexable
+logger.info(
+    "Order shipped",
+    extra={"order_id": order_id, "customer_id": customer_id, "total_usd": total},
+)
+```
+
+---
+
+## 5. Configuration Patterns
 
 ### `basicConfig` — for scripts and simple tools
 
@@ -150,7 +239,7 @@ logging.config.dictConfig(LOGGING)
 
 ---
 
-## 5. Structured Logging
+## 6. Structured Logging
 
 Plain-text logs are hard to query at scale. In production, emit **structured (JSON) logs** so that log aggregators (Datadog, Loki, CloudWatch, etc.) can index fields directly.
 
@@ -216,7 +305,7 @@ Use `structlog.contextvars.bind_contextvars(request_id=req_id)` at the start of 
 
 ---
 
-## 6. Worked Example
+## 7. Worked Example
 
 A complete setup for a small application using stdlib logging with `dictConfig` and JSON output in production.
 
