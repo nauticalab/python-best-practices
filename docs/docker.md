@@ -53,22 +53,26 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Install uv for fast dependency installation
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Pin uv to a specific version for reproducible builds
+# (check https://github.com/astral-sh/uv/releases for the latest stable)
+COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /usr/local/bin/uv
 
+# Install dependencies first — this layer is cached unless the lock file changes
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy source and install the project into the venv
+COPY src/ ./src/
+RUN uv sync --frozen --no-dev
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-# Copy only the installed virtualenv from the builder
+# The venv already contains the installed project — no separate COPY src/ needed
 COPY --from=builder /build/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
-
-COPY src/ ./src/
 
 CMD ["python", "-m", "myapp"]
 ```
@@ -266,12 +270,17 @@ WORKDIR /build
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Bring in uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Pin uv to a specific version for reproducible builds
+# (check https://github.com/astral-sh/uv/releases for the latest stable)
+COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /usr/local/bin/uv
 
-# Install dependencies into a virtualenv (no dev deps, no editable installs)
+# 1) Install third-party dependencies only — layer is cached unless lock file changes
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
+
+# 2) Copy source and install the project itself into the venv
+COPY src/ ./src/
+RUN uv sync --frozen --no-dev
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -282,16 +291,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
-# Non-root user
+# Create the non-root user before copying files so we can assign ownership
 RUN useradd --create-home --shell /bin/bash appuser
 
-# Copy virtualenv from builder
-COPY --from=builder /build/.venv /app/.venv
+# Copy virtualenv (project installed inside) with correct ownership
+COPY --from=builder --chown=appuser:appuser /build/.venv /app/.venv
 
-# Copy application source
-COPY src/ ./src/
-
-# Switch to non-root user before the final CMD
+# Switch to non-root user
 USER appuser
 
 EXPOSE 8000
