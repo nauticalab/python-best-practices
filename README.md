@@ -9,6 +9,7 @@ A collection of best-practice guides for coding in Python and Rust, maintained b
 | [Python Guidelines](python/best-practices.md) | Common guidelines for writing clean, idiomatic Python |
 | [Python Logging](docs/logging.md) | Logging configuration, log levels, and structured logging |
 | [Python async/await](docs/async-await.md) | Async/await patterns, concurrency, error handling, and testing |
+| [CI/CD for Python](docs/ci-cd.md) | GitHub Actions workflows for testing, linting, type-checking, and publishing |
 | Rust Guidelines *(coming soon)* | Best practices for safe, performant Rust code |
 
 ## Contributing
