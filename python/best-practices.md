@@ -179,6 +179,318 @@ def first(items: list[T]) -> T | None:
     return items[0] if items else None
 ```
 
+### `TypedDict` — Typed Dictionary Structures
+
+Use `TypedDict` when you need to type a plain dictionary with a known set of keys, for example when working with JSON payloads, configuration blobs, or legacy APIs that return dicts.
+
+```python
+from typing import TypedDict, NotRequired
+
+class Movie(TypedDict):
+    title: str
+    year: int
+    rating: NotRequired[float]  # optional key (Python 3.11+; use total=False in older versions)
+
+# Good — type checker knows the shape
+def display(movie: Movie) -> str:
+    return f"{movie['title']} ({movie['year']})"
+
+# The checker will flag unknown keys or wrong value types:
+bad: Movie = {"title": "Dune", "year": "2021"}  # error: year must be int
+```
+
+When to prefer `TypedDict` vs alternatives:
+
+| Use case | Recommended type |
+|---|---|
+| Typed plain dict (JSON, config) | `TypedDict` |
+| Immutable record with logic | `dataclass` / `@dataclass(frozen=True)` |
+| External data validation | `pydantic.BaseModel` |
+| Simple named tuple | `NamedTuple` |
+
+> **Tip:** `TypedDict` is structural — a plain `dict` with the right keys is assignable. This makes it ideal for typing data at API boundaries without requiring callers to import your class.
+
+### `Literal` — Value-Constrained Types
+
+Use `Literal` to restrict a parameter or return value to a finite set of specific values. This lets the type checker catch invalid arguments and enables exhaustive narrowing.
+
+```python
+from typing import Literal
+
+SortOrder = Literal["asc", "desc"]
+HttpMethod = Literal["GET", "POST", "PUT", "DELETE", "PATCH"]
+
+# Good — invalid values are caught at type-check time
+def sort_users(order: SortOrder) -> list[User]:
+    ...
+
+sort_users("asc")    # OK
+sort_users("random") # error: Argument of type "random" not assignable to "SortOrder"
+
+
+# Combine with unions for exhaustive branching
+Status = Literal["pending", "active", "archived"]
+
+def handle(status: Status) -> str:
+    if status == "pending":
+        return "waiting"
+    elif status == "active":
+        return "running"
+    elif status == "archived":
+        return "done"
+    # Pyright will warn if a branch is missing
+```
+
+> **Avoid** using `str` for arguments that only accept a handful of values — `Literal` gives you documentation, IDE completion, and type safety for free.
+
+### `NewType` — Domain-Modelled Primitives
+
+`NewType` creates a distinct named type at type-check time with **zero runtime cost**. Use it to prevent accidentally mixing semantically different values that share the same underlying type.
+
+```python
+from typing import NewType
+
+UserId = NewType("UserId", int)
+OrderId = NewType("OrderId", int)
+
+def get_user(user_id: UserId) -> User: ...
+def get_order(order_id: OrderId) -> Order: ...
+
+uid = UserId(42)
+oid = OrderId(42)
+
+get_user(uid)   # OK
+get_user(oid)   # error: OrderId is not assignable to UserId
+get_user(42)    # error: plain int is not assignable to UserId
+```
+
+`NewType` is cheaper than a full wrapper class — the constructor is a no-op at runtime (returns the value unchanged), so there is no overhead.
+
+> **When not to use it:** If you need extra methods or validation on the type, use a proper class or `dataclass` instead. `NewType` is purely a type-checker construct.
+
+### `Final` and `ClassVar` — Immutability & Class-Level Annotations
+
+Use `Final` to declare values that must not be reassigned, and `ClassVar` to annotate attributes shared across all instances of a class (as opposed to per-instance attributes).
+
+```python
+from typing import Final, ClassVar
+
+# Module-level constant — reassignment is a type error
+MAX_RETRIES: Final = 3
+MAX_RETRIES = 5  # error: Cannot assign to final variable
+
+# Class-level shared attribute vs instance attribute
+class Counter:
+    count: ClassVar[int] = 0   # shared across all instances
+    name: str                  # per-instance
+
+    def __init__(self, name: str) -> None:
+        Counter.count += 1
+        self.name = name
+
+# Final instance attribute — set once in __init__, never changed after
+class Config:
+    def __init__(self, dsn: str) -> None:
+        self.dsn: Final = dsn
+
+cfg = Config("postgresql://localhost/db")
+cfg.dsn = "other"  # error: Cannot assign to final variable
+```
+
+> **Tip:** `Final` on a class attribute without `ClassVar` means each instance gets its own final value (set once in `__init__`). Combine both — `ClassVar[Final[int]]` — for a class-level constant.
+
+### `@overload` — Multiple Call Signatures
+
+Use `@overload` when a function's return type varies depending on the types of its arguments. This gives callers precise type information without losing type safety.
+
+```python
+from typing import overload
+
+@overload
+def parse(raw: str) -> dict[str, object]: ...
+@overload
+def parse(raw: bytes) -> dict[str, object]: ...
+@overload
+def parse(raw: None) -> None: ...
+
+def parse(raw: str | bytes | None) -> dict[str, object] | None:
+    """Actual implementation — not type-checked by callers."""
+    if raw is None:
+        return None
+    data = raw if isinstance(raw, str) else raw.decode()
+    return json.loads(data)
+
+# The checker now knows the exact return type at each call site:
+result: dict[str, object] = parse("{}") # OK
+nothing: None = parse(None)             # OK
+```
+
+Rules for `@overload`:
+- Declare all overloads **before** the implementation.
+- The implementation signature must be broad enough to accept all overload cases.
+- Only the overload stubs are visible to type checkers — the implementation is hidden.
+
+> **Avoid** using `@overload` just to avoid writing a union type. Reserve it for cases where the *return type* genuinely differs based on *argument types*.
+
+### `TypeGuard` and Type Narrowing
+
+Python's type checker narrows types automatically inside `isinstance` checks. For custom predicates that perform the same narrowing, use `TypeGuard`.
+
+```python
+from typing import TypeGuard
+
+# Built-in narrowing — no extra effort needed
+def process(value: int | str) -> None:
+    if isinstance(value, int):
+        print(value + 1)   # value is int here
+    else:
+        print(value.upper()) # value is str here
+
+
+# Custom TypeGuard — teach the checker about your own predicate
+def is_string_list(val: list[object]) -> TypeGuard[list[str]]:
+    return all(isinstance(x, str) for x in val)
+
+items: list[object] = ["a", "b", "c"]
+if is_string_list(items):
+    items[0].upper()  # OK — narrowed to list[str] inside this block
+```
+
+Use `assert_never` for exhaustive `match`/`if-elif` chains to ensure every case is handled:
+
+```python
+from typing import assert_never, Literal
+
+Status = Literal["pending", "active", "archived"]
+
+def handle(status: Status) -> str:
+    if status == "pending":
+        return "queued"
+    elif status == "active":
+        return "running"
+    elif status == "archived":
+        return "done"
+    else:
+        assert_never(status)  # type error if a Literal variant is missing
+```
+
+### `Self` — Fluent Interfaces and Subclass-Safe Returns
+
+Use `Self` (from `typing`, Python 3.11+; or `typing_extensions` for older versions) when a method returns `self` or `cls`. This ensures subclasses inherit the correct return type without needing a `TypeVar` boilerplate.
+
+```python
+from typing import Self
+
+class QueryBuilder:
+    def __init__(self) -> None:
+        self._filters: list[str] = []
+
+    def where(self, condition: str) -> Self:
+        self._filters.append(condition)
+        return self
+
+    def limit(self, n: int) -> Self:
+        self._limit = n
+        return self
+
+class UserQueryBuilder(QueryBuilder):
+    def active_only(self) -> Self:
+        return self.where("active = true")
+
+# The checker correctly infers UserQueryBuilder, not QueryBuilder:
+result: UserQueryBuilder = UserQueryBuilder().active_only().limit(10)
+```
+
+Also use `Self` on `@classmethod` factory methods:
+
+```python
+class Model:
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> Self:
+        obj = cls()
+        # populate fields ...
+        return obj
+```
+
+> **Before `Self`:** The idiomatic workaround was `T = TypeVar("T", bound="QueryBuilder")` on every method — verbose and error-prone in inheritance hierarchies. `Self` eliminates the boilerplate.
+
+### `TYPE_CHECKING` Guard — Avoiding Circular Imports
+
+Circular imports occur when two modules reference each other at runtime. If the import is only needed for type annotations, move it behind a `TYPE_CHECKING` guard — it is `False` at runtime (so the import never executes) but `True` during type-checking.
+
+```python
+# models.py
+from __future__ import annotations  # makes all annotations lazy strings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from myapp.services import UserService  # only imported when type-checking
+
+class User:
+    def process(self, service: UserService) -> None:  # annotation is a string at runtime
+        ...
+```
+
+```python
+# services.py
+from myapp.models import User  # no circular import — models.py never imports services at runtime
+
+class UserService:
+    def activate(self, user: User) -> None:
+        ...
+```
+
+Key points:
+- Always pair `TYPE_CHECKING` imports with `from __future__ import annotations` (or quote the annotation manually: `"UserService"`).
+- Only use this for type-annotation-only imports — if you call methods on the imported object at runtime, you need a real import.
+- Prefer restructuring the module graph if circular imports become pervasive; `TYPE_CHECKING` is a workaround, not a design pattern.
+
+### `Annotated` — Metadata on Types
+
+`Annotated[T, metadata]` attaches arbitrary metadata to a type without changing its static type. Frameworks like Pydantic v2 and FastAPI use this to attach validation rules, documentation, and dependency injection hints directly to type annotations.
+
+```python
+from typing import Annotated
+from pydantic import BaseModel, Field, Gt, Lt
+
+# Pydantic v2: validation rules embedded in the type
+class Order(BaseModel):
+    quantity: Annotated[int, Gt(0)]             # must be > 0
+    discount: Annotated[float, Ge(0), Le(1)]    # 0.0 – 1.0
+    description: Annotated[str, Field(max_length=200)]
+
+
+# FastAPI: dependency injection via Annotated
+from fastapi import Depends, FastAPI
+
+app = FastAPI()
+
+def get_db() -> Database: ...
+
+DatabaseDep = Annotated[Database, Depends(get_db)]  # reusable alias
+
+@app.get("/users")
+def list_users(db: DatabaseDep) -> list[User]:
+    return db.query(User).all()
+```
+
+You can also define your own metadata for documentation or custom tooling:
+
+```python
+from dataclasses import dataclass
+from typing import Annotated
+
+@dataclass
+class Positive:
+    """Marker: value must be > 0."""
+
+Quantity = Annotated[int, Positive()]  # reusable semantic alias
+
+def set_stock(amount: Quantity) -> None: ...
+```
+
+> **Tip:** `Annotated` metadata is ignored by the default type checker — it only matters to frameworks and tools that explicitly read `__metadata__`. The static type is always the first argument (`T`).
+
 ---
 
 ## 3. Project Structure & Packaging
@@ -772,7 +1084,15 @@ result = " ".join(words)
 
 - [PEP 8 – Style Guide for Python Code](https://peps.python.org/pep-0008/)
 - [PEP 484 – Type Hints](https://peps.python.org/pep-0484/)
+- [PEP 544 – Protocols: Structural Subtyping](https://peps.python.org/pep-0544/)
+- [PEP 586 – Literal Types](https://peps.python.org/pep-0586/)
+- [PEP 589 – TypedDict](https://peps.python.org/pep-0589/)
+- [PEP 591 – Final qualifier](https://peps.python.org/pep-0591/)
+- [PEP 647 – User-Defined Type Guards](https://peps.python.org/pep-0647/)
+- [PEP 673 – Self Type](https://peps.python.org/pep-0673/)
+- [PEP 593 – Annotated Types](https://peps.python.org/pep-0593/)
 - [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
 - [Effective Python (3rd Edition) — Brett Slatkin](https://effectivepython.com/)
 - [Python Docs — Logging HOWTO](https://docs.python.org/3/howto/logging.html)
 - [Real Python — Python Best Practices](https://realpython.com/tutorials/best-practices/)
+- [mypy docs — Type narrowing](https://mypy.readthedocs.io/en/stable/type_narrowing.html)
